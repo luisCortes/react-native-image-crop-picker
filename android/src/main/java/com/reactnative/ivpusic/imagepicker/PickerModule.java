@@ -399,53 +399,57 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
 
     @ReactMethod
     public void compressImage(final ReadableMap options, final Promise promise) {
-        WritableMap image = new WritableNativeMap();
         final Activity activity = getCurrentActivity();
         if (activity == null) {
             promise.reject(E_ACTIVITY_DOES_NOT_EXIST, "Activity doesn't exist");
             return;
         }
-        resultCollector.setup(promise, multiple);
-        //setConfiguration(options);
-        if (pictureToCompress != null){
-            pictureToCompress = Environment.DIRECTORY_PICTURES + picturesPath + pictureToCompress;
-            File f = Environment.getExternalStoragePublicDirectory(
-                    pictureToCompress);
-            try {
-                BitmapFactory.Options original = validateImage(f.getPath());
-                File compressedImage = compression.compressImage(this.reactContext, options, f.getPath(), original);
-                String compressedImagePath = compressedImage.getPath();
-                BitmapFactory.Options bmpOptions = validateImage(compressedImagePath);
-                long modificationDate = new File(compressedImagePath).lastModified();
 
-                image.putString("path", "file://" + compressedImagePath);
-                image.putInt("width", bmpOptions.outWidth);
-                image.putInt("height", bmpOptions.outHeight);
-                image.putString("mime", bmpOptions.outMimeType);
-                image.putInt("size", (int) new File(compressedImagePath).length());
-                image.putString("modificationDate", String.valueOf(modificationDate));
+        // Ejecutamos la compresión en un hilo separado para evitar ANR
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                WritableMap image = new WritableNativeMap();
+                resultCollector.setup(promise, multiple);
 
-                if (includeBase64) {
-                    image.putString("data", getBase64StringFromFile(compressedImagePath));
+                if (pictureToCompress != null) {
+                    pictureToCompress = Environment.DIRECTORY_PICTURES + picturesPath + pictureToCompress;
+                    File f = Environment.getExternalStoragePublicDirectory(pictureToCompress);
+
+                    try {
+                        BitmapFactory.Options original = validateImage(f.getPath());
+                        File compressedImage = compression.compressImage(reactContext, options, f.getPath(), original);
+                        String compressedImagePath = compressedImage.getPath();
+                        BitmapFactory.Options bmpOptions = validateImage(compressedImagePath);
+                        long modificationDate = new File(compressedImagePath).lastModified();
+
+                        image.putString("path", "file://" + compressedImagePath);
+                        image.putInt("width", bmpOptions.outWidth);
+                        image.putInt("height", bmpOptions.outHeight);
+                        image.putString("mime", bmpOptions.outMimeType);
+                        image.putInt("size", (int) new File(compressedImagePath).length());
+                        image.putString("modificationDate", String.valueOf(modificationDate));
+
+                        if (includeBase64) {
+                            image.putString("data", getBase64StringFromFile(compressedImagePath));
+                        }
+
+                        resultCollector.notifySuccess(image);
+                        promise.resolve(null);
+
+                    } catch (Exception e) {
+                        promise.reject(E_PICTURE_2_COMPRESS_NOT_FOUND, "No sirve... X " + e.getMessage());
+                        resultCollector.notifyProblem(PROBLEM_2_COMPRESS, "Error.");
+                        promise.reject(PROBLEM_2_COMPRESS, "Error  1 " + e.getMessage());
+                    }
+                } else {
+                    resultCollector.notifyProblem(E_PICTURE_2_COMPRESS_NOT_FOUND, "Image to compress not found.");
+                    promise.reject(E_PICTURE_2_COMPRESS_NOT_FOUND, "Error 2");
                 }
-
-                resultCollector.notifySuccess(image);
-                promise.resolve(null);
-
-            } catch(Exception e){
-                promise.reject(E_PICTURE_2_COMPRESS_NOT_FOUND, "No sirve... X "  + e.getMessage());
-                resultCollector.notifyProblem(PROBLEM_2_COMPRESS, "Error.");
-                promise.reject(PROBLEM_2_COMPRESS, "Error  1 " + e.getMessage());
-
             }
-        } else {
-            resultCollector.notifyProblem(E_PICTURE_2_COMPRESS_NOT_FOUND, "Image to compress not found.");
-            promise.reject(E_PICTURE_2_COMPRESS_NOT_FOUND, "Error 2");
-
-        }
+        }).start();
     }
-
-
+    
     public static final int TIRAMISU = 33;
 
     @ReactMethod
@@ -680,20 +684,15 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
         }
 
         try {
-            // Very simple code to copy a picture from the application's
-            // resource into the external file.  Note that this code does
-            // no error checking, and assumes the picture is small (does not
-            // try to copy it in chunks).  Note that if external storage is
-            // not currently mounted this will silently fail.
             OutputStream outputStream = new FileOutputStream(file);
-            byte[] data = new byte[inputStream.available()];
-            inputStream.read(data);
-            outputStream.write(data);
+            byte[] buffer = new byte[4096]; // 4KB buffer
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+            }
             inputStream.close();
             outputStream.close();
         } catch (IOException e) {
-            // Unable to create file, likely because external storage is
-            // not currently mounted.
             Log.w("image-crop-picker", "Error writing " + file, e);
         }
 
